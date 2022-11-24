@@ -1,0 +1,135 @@
+// 外部ユーザーを除外するためにUserPrincipalName条件指定
+// Equipmentを除外するためにGivenName条件指定
+Set(
+    gblUsers,
+    Filter(
+        Office365ユーザー.SearchUserV2({isSearchTermRequired:false}).value,
+        Not(".onmicrosoft.com#EXT#@yappf.onmicrosoft.com" in UserPrincipalName),
+        !IsBlank(GivenName)
+    )
+);
+
+Clear(colUsers);
+ForAll(
+    gblUsers As User,
+    Collect(
+        colUsers,
+        {
+            UPN: User.UserPrincipalName,
+            Prop: User,
+            Photo: IfError(Office365ユーザー.UserPhotoV2(User.UserPrincipalName), Blank()),
+            Manager: IfError(Office365ユーザー.ManagerV2(User.UserPrincipalName), Blank()),
+            Direct: Office365ユーザー.DirectReportsV2(User.UserPrincipalName).value
+        }
+    )
+);
+
+Set(
+    gblTopLevelUser,
+    If(
+        CountRows(Filter(colUsers, IsBlank(Manager))) = 1,
+        First(Filter(colUsers, IsBlank(Manager))),
+        Blank()
+    )
+);
+
+// --------------------
+
+Set(gblLevelLimit, 3);
+
+ClearCollect(
+    colUsersRecursive,
+    {
+        Level: 0,
+        UPN: gblTopLevelUser.UPN,
+        Prop: gblTopLevelUser.Prop,
+        Photo: gblTopLevelUser.Photo,
+        Manager: gblTopLevelUser.Manager,
+        Direct: gblTopLevelUser.Direct
+    }
+);
+
+ForAll(
+    Sequence(gblLevelLimit) As i,
+    ForAll(
+        Filter(colUsersRecursive, Level=(i.Value - 1)) As L,
+        ForAll(
+            Filter(colUsers, Manager.userPrincipalName=L.UPN) As P,
+            Collect(
+                colUsersRecursive,
+                {
+                    Level: i.Value,
+                    UPN: P.UPN,
+                    Prop: P.Prop,
+                    Photo: P.Photo,
+                    Manager: P.Manager,
+                    Direct: P.Direct
+                }
+            )
+        )
+    )
+);
+
+Set(
+    gblUsersRecursive,
+    AddColumns(
+        GroupBy(
+            colUsersRecursive,
+            "Level",
+            "Users"
+        ),
+        "Concat",
+        Left(Concat(Users, UPN & ","), Len(Concat(Users, UPN & ",")) - 1)
+    )
+);
+
+// --------------------
+
+
+ClearCollect(
+    colRoutes,
+    {
+        Level: 0,
+        UPN: gblTopLevelUser.UPN,
+        // Prop: gblTopLevelUser.Prop,
+        // Photo: gblTopLevelUser.Photo,
+        // Manager: gblTopLevelUser.Manager,
+        // Direct: gblTopLevelUser.Direct,
+        Route: gblTopLevelUser.Prop.Department
+    }
+);
+
+ForAll(
+    Sequence(gblLevelLimit) As i,
+    ForAll(
+        Filter(colRoutes, Level=(i.Value - 1)) As L,
+        ForAll(
+            Filter(colUsers, Manager.userPrincipalName=L.UPN) As P,
+            Collect(
+                colRoutes,
+                {
+                    Level: i.Value,
+                    UPN: P.UPN,
+                    // Prop: P.Prop,
+                    // Photo: P.Photo,
+                    // Manager: P.Manager,
+                    // Direct: P.Direct,
+                    Route: L.Route & "/" & P.Prop.Department
+                }
+            )
+        )
+    )
+);
+
+Set(
+    gblRoutes,
+    SortByColumns(
+        RenameColumns(
+            Distinct(colRoutes, Route),
+            "Result",
+            "Route"
+        ),
+        "Route",
+        Ascending
+    )
+)
